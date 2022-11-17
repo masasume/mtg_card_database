@@ -49,10 +49,18 @@ create_hdfs_all_cards_partition_dir = HdfsMkdirFileOperator(
     dag=dag,
 )
 
+# 'hdfs_put_all_magic_cards = HdfsPutFileOperator(
+#     task_id="hdfs_put_all_magic_cards",
+#     local_file="/home/airflow/mtg/mtgcards.json",
+#     remote_file='/user/hadoop/mtg/raw/mtgcards/{{ macros.ds_format(ds, "%Y-%m-%d", "%Y")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%m")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%d")}}/mtgcards.json',
+#     hdfs_conn_id="hdfs",
+#     dag=dag,
+# )'
+
 hdfs_put_all_magic_cards = HdfsPutFileOperator(
     task_id="hdfs_put_all_magic_cards",
-    local_file="/home/airflow/mtg/mtgcards.json",
-    remote_file='/user/hadoop/mtg/raw/mtgcards/{{ macros.ds_format(ds, "%Y-%m-%d", "%Y")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%m")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%d")}}/mtgcards.json',
+    local_file="/home/airflow/mtg/mtgcards_{{ ds }}.json",
+    remote_file='/user/hadoop/mtg/raw/{{ macros.ds_format(ds, "%Y-%m-%d", "%Y")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%m")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%d")}}/mtgcards_{{ ds }}.json',
     hdfs_conn_id="hdfs",
     dag=dag,
 )
@@ -61,7 +69,7 @@ hiveSQL_create_table_all_cards='''
 CREATE EXTERNAL TABLE IF NOT EXISTS magic_cards(
 	name            STRING,
     mana_cost       STRING,
-    cmc             INT,
+    cmc             FLOAT,
     colors          ARRAY<STRING>,
     color_identity  ARRAY<STRING>,
     type            STRING,
@@ -104,13 +112,40 @@ CREATE EXTERNAL TABLE IF NOT EXISTS magic_cards(
     >,
 	id STRING
     ) 
-    COMMENT 'MTG_Cards' PARTITIONED BY (partition_year int, partition_month int, partition_day int) ROW FORMAT DELIMITED FIELDS TERMINATED BY '\\t' STORED AS TEXTFILE LOCATION '/user/hadoop/mtg/raw/mtgcards'
-TBLPROPERTIES ('skip.header.line.count'='1');
+    COMMENT 'IMDb Movies' PARTITIONED BY (partition_year int, partition_month int, partition_day int) ROW FORMAT DELIMITED FIELDS TERMINATED BY '\\t' STORED AS TEXTFILE LOCATION 'user/hadoop/mtg/raw'
+    TBLPROPERTIES ('skip.header.line.count'='1');
 '''
 
 hiveSQL_select_all_cards ='''
-SELECT * from magic_cards;
+SELECT * from magic_cards LIMIT 100;
 '''
+
+hiveSQL_drop_cards_table='''
+DROP TABLE IF EXISTS magic_cards;
+'''
+
+hiveSQL_add_partition_all_magic_cards='''
+ALTER TABLE magic_cards
+ADD IF NOT EXISTS partition(partition_year={{ macros.ds_format(ds, "%Y-%m-%d", "%Y")}}, partition_month={{ macros.ds_format(ds, "%Y-%m-%d", "%m")}}, partition_day={{ macros.ds_format(ds, "%Y-%m-%d", "%d")}})
+LOCATION '/user/hadoop/mtg/raw/{{ macros.ds_format(ds, "%Y-%m-%d", "%Y")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%m")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%d")}}/mtgcards';
+'''
+
+addPartition_HiveTable_all_cards = HiveOperator(
+    task_id='addPartition_HiveTable_all_cards',
+    hql=hiveSQL_add_partition_all_magic_cards,
+    hive_cli_conn_id='beeline',
+    dag=dag)
+
+
+drop_HiveTable_magic_cards = HiveOperator(
+    task_id='drop_HiveTable_magic_cards',
+    hql=hiveSQL_drop_cards_table,
+    hive_cli_conn_id='beeline',
+    dag=dag)
+
+# hiveSQL_load_card_from_json_to_table='''
+# LOAD DATA LOCAL INPATH '/user/hadoop/mtg/raw/{{ macros.ds_format(ds, "%Y-%m-%d", "%Y")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%m")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%d")}}/mtgcards/mtgcards.json' OVERWRITE INTO TABLE cards;
+# '''
 
 select_all_cards = HiveOperator(
     task_id="select_all_cards",
@@ -118,13 +153,6 @@ select_all_cards = HiveOperator(
     hive_cli_conn_id="beeline",
     dag=dag,
 )
-
-create_HiveTable_all_magic_cards = HiveOperator(
-    task_id='create_all_magic_cards_table',
-    hql=hiveSQL_create_table_all_cards,
-    hive_cli_conn_id='beeline',
-    dag=dag,
-) 
 
 
 # def a python function
@@ -142,7 +170,7 @@ def getAllMTGCards():
         )
         cards = cards + response.json()["cards"]
     cardsJson = json.dumps(cards)
-    text_file = open("/home/airflow/mtg/mtgcards.json", "w")
+    text_file = open("/home/airflow/mtg/mtgcards_{{ ds }}.json", "w")
     text_file.write(cardsJson)
     return
 
@@ -152,18 +180,18 @@ download_all_magic_cards = PythonOperator(
     task_id="download_all_magic_cards", python_callable=getAllMTGCards, dag=dag
 )
 
-# def a python function
-def my_function(x):
-    return x + " This is a Python function."
+# # def a python function
+# def my_function(x):
+#     return x + " This is a Python function."
 
 
-# call python function with PythonOperator
-t1 = PythonOperator(
-    task_id="print",
-    python_callable=my_function,
-    op_kwargs={"x": "Apache Airflow"},
-    dag=dag,
-)
+# # call python function with PythonOperator
+# t1 = PythonOperator(
+#     task_id="print",
+#     python_callable=my_function,
+#     op_kwargs={"x": "Apache Airflow"},
+#     dag=dag,
+# )
 
 clear_local_import_dir = ClearDirectoryOperator(
     task_id="clear_import_dir",
@@ -179,10 +207,17 @@ download_test_magic_card = HttpDownloadOperator(
     dag=dag,
 )
 
+create_HiveTable_all_magic_cards = HiveOperator(
+    task_id='create_all_magic_cards_table',
+    hql=hiveSQL_create_table_all_cards,
+    hive_cli_conn_id='beeline',
+    dag=dag,
+) 
+
 dummy_op = DummyOperator(task_id="dummy", dag=dag)
 
 # create_local_import_dir >> clear_local_import_dir >> download_test_magic_card
-create_local_import_dir >> clear_local_import_dir >> download_all_magic_cards >> create_hdfs_all_cards_partition_dir >> hdfs_put_all_magic_cards >> create_HiveTable_all_magic_cards >> select_all_cards
+create_local_import_dir >> clear_local_import_dir >> download_all_magic_cards >> create_hdfs_all_cards_partition_dir >> drop_HiveTable_magic_cards >> hdfs_put_all_magic_cards >> create_HiveTable_all_magic_cards >> addPartition_HiveTable_all_cards >> select_all_cards >> dummy_op
 
 # create_hdfs_all_cards_partition_dir
 # Call python task with taskname (e.g. t1)
