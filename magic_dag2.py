@@ -71,17 +71,15 @@ CREATE EXTERNAL TABLE IF NOT EXISTS magic_cards(
 	originalType STRING,
 	legalities ARRAY<STRUCT<format:STRING, legality:STRING>>,
 	names ARRAY<STRING>
-    ) 
+    ) PARTITIONED BY(partition_year INT, partition_month INT, partition_day INT) 
     ROW FORMAT SERDE 'org.apache.hive.hcatalog.data.JsonSerDe' LOCATION 'hdfs:///user/hadoop/mtg/raw/{{ macros.ds_format(ds, "%Y-%m-%d", "%Y")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%m")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%d")}}';
 '''
-
 
 hiveSQL_add_partition_all_magic_cards='''
 ALTER TABLE magic_cards
 ADD IF NOT EXISTS partition(partition_year={{ macros.ds_format(ds, "%Y-%m-%d", "%Y")}}, partition_month={{ macros.ds_format(ds, "%Y-%m-%d", "%m")}}, partition_day={{ macros.ds_format(ds, "%Y-%m-%d", "%d")}})
 LOCATION '/user/hadoop/mtg/raw/{{ macros.ds_format(ds, "%Y-%m-%d", "%Y")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%m")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%d")}}';
 '''
-
 
 create_local_import_dir = CreateDirectoryOperator(
     task_id="create_import_dir",
@@ -200,5 +198,5 @@ dummy_op = DummyOperator(
 
 
 create_local_import_dir >> clear_local_import_dir 
-clear_local_import_dir >> download_all_magic_cards >> add_JAR_dependencies >> create_hdfs_all_cards_partition_dir >> hdfs_put_all_magic_cards >> drop_HiveTable_magic_cards >> create_HiveTable_all_magic_cards >> addPartition_HiveTable_all_cards >> select_all_cards >> dummy_op
+clear_local_import_dir >> download_all_magic_cards >> add_JAR_dependencies >> create_hdfs_all_cards_partition_dir >> hdfs_put_all_magic_cards >> drop_HiveTable_magic_cards >> create_HiveTable_all_magic_cards >> addPartition_HiveTable_all_cards >> dummy_op
 dummy_op
