@@ -72,13 +72,33 @@ CREATE EXTERNAL TABLE IF NOT EXISTS magic_cards(
 	legalities ARRAY<STRUCT<format:STRING, legality:STRING>>,
 	names ARRAY<STRING>
     ) PARTITIONED BY(partition_year INT, partition_month INT, partition_day INT) 
-    ROW FORMAT SERDE 'org.apache.hive.hcatalog.data.JsonSerDe' LOCATION 'hdfs:///user/hadoop/mtg/raw/{{ macros.ds_format(ds, "%Y-%m-%d", "%Y")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%m")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%d")}}';
+    ROW FORMAT SERDE 'org.apache.hive.hcatalog.data.JsonSerDe' LOCATION 'hdfs:///user/hadoop/mtg/raw/magic_cards';
+'''
+
+hiveSQL_create_table_foreign_cards='''
+CREATE EXTERNAL TABLE IF NOT EXISTS foreign_magic_cards(
+	name STRING,
+    text STRING,
+    type STRING,
+    flavor STRING,
+    imageUrl STRING,
+    language STRING,
+    multiverseid STRING,
+    cardid STRING
+) PARTITIONED BY(partition_year INT, partition_month INT, partition_day INT)
+ROW FORMAT SERDE 'org.apache.hive.hcatalog.data.JsonSerDe' STORED AS TEXTFILE LOCATION 'hdfs:///user/hadoop/mtg/raw/foreign_magic_cards';
 '''
 
 hiveSQL_add_partition_all_magic_cards='''
 ALTER TABLE magic_cards
 ADD IF NOT EXISTS partition(partition_year={{ macros.ds_format(ds, "%Y-%m-%d", "%Y")}}, partition_month={{ macros.ds_format(ds, "%Y-%m-%d", "%m")}}, partition_day={{ macros.ds_format(ds, "%Y-%m-%d", "%d")}})
-LOCATION '/user/hadoop/mtg/raw/{{ macros.ds_format(ds, "%Y-%m-%d", "%Y")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%m")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%d")}}';
+LOCATION '/user/hadoop/mtg/raw/magic_cards/{{ macros.ds_format(ds, "%Y-%m-%d", "%Y")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%m")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%d")}}';
+'''
+
+hiveSQL_add_partition_foreign_magic_cards='''
+ALTER TABLE foreign_magic_cards
+ADD IF NOT EXISTS partition(partition_year={{ macros.ds_format(ds, "%Y-%m-%d", "%Y")}}, partition_month={{ macros.ds_format(ds, "%Y-%m-%d", "%m")}}, partition_day={{ macros.ds_format(ds, "%Y-%m-%d", "%d")}})
+LOCATION '/user/hadoop/mtg/raw/foreign_magic_cards/{{ macros.ds_format(ds, "%Y-%m-%d", "%Y")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%m")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%d")}}';
 '''
 
 create_local_import_dir = CreateDirectoryOperator(
@@ -88,24 +108,23 @@ create_local_import_dir = CreateDirectoryOperator(
     dag=dag,
 )
 
-hiveSQL_select_all_cards ='''
-SELECT * from magic_cards LIMIT 100;
-'''
-
 hiveSQL_drop_cards_table='''
 DROP TABLE IF EXISTS magic_cards;
 '''
 
-select_all_cards = HiveOperator(
-    task_id="select_all_cards",
-    hql=hiveSQL_select_all_cards,
-    hive_cli_conn_id="beeline",
-    dag=dag,
-)
+hiveSQL_drop_foreign_cards_table='''
+DROP TABLE IF EXISTS foreign_magic_cards;
+'''
 
 drop_HiveTable_magic_cards = HiveOperator(
     task_id='drop_HiveTable_magic_cards',
     hql=hiveSQL_drop_cards_table,
+    hive_cli_conn_id='beeline',
+    dag=dag)
+
+drop_HiveTable_foreign_magic_cards = HiveOperator(
+    task_id='drop_HiveTable_foreign_magic_cards',
+    hql=hiveSQL_drop_foreign_cards_table,
     hive_cli_conn_id='beeline',
     dag=dag)
 
@@ -165,8 +184,15 @@ download_all_magic_cards = PythonOperator(
 )
 
 create_hdfs_all_cards_partition_dir = HdfsMkdirFileOperator(
-    task_id="mkdir_hdfs_raw_dir",
-    directory='/user/hadoop/mtg/raw/{{ macros.ds_format(ds, "%Y-%m-%d", "%Y")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%m")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%d")}}',
+    task_id="mkdir_hdfs_raw_dir_magic_cards",
+    directory='/user/hadoop/mtg/raw/magic_cards/{{ macros.ds_format(ds, "%Y-%m-%d", "%Y")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%m")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%d")}}',
+    hdfs_conn_id="hdfs",
+    dag=dag,
+)
+
+create_hdfs_foreign_cards_partition_dir = HdfsMkdirFileOperator(
+    task_id="mkdir_hdfs_raw_dir_foreign_magic_cards",
+    directory='/user/hadoop/mtg/raw/foreign_magic_cards/{{ macros.ds_format(ds, "%Y-%m-%d", "%Y")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%m")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%d")}}',
     hdfs_conn_id="hdfs",
     dag=dag,
 )
@@ -174,7 +200,15 @@ create_hdfs_all_cards_partition_dir = HdfsMkdirFileOperator(
 hdfs_put_all_magic_cards = HdfsPutFileOperator(
     task_id="hdfs_put_all_magic_cards",
     local_file="/home/airflow/mtg/mtgcards_{{ ds }}.json",
-    remote_file='/user/hadoop/mtg/raw/{{ macros.ds_format(ds, "%Y-%m-%d", "%Y")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%m")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%d")}}/mtgcards_{{ ds }}.json',
+    remote_file='/user/hadoop/mtg/raw/magic_cards/{{ macros.ds_format(ds, "%Y-%m-%d", "%Y")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%m")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%d")}}/mtgcards_{{ ds }}.json',
+    hdfs_conn_id="hdfs",
+    dag=dag,
+)
+
+hdfs_put_foreign_magic_cards = HdfsPutFileOperator(
+    task_id="hdfs_put_foreign_magic_cards",
+    local_file="/home/airflow/mtg/foreign_mtgcards_{{ ds }}.json",
+    remote_file='/user/hadoop/mtg/raw/foreign_magic_cards/{{ macros.ds_format(ds, "%Y-%m-%d", "%Y")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%m")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%d")}}/foreign_mtgcards_{{ ds }}.json',
     hdfs_conn_id="hdfs",
     dag=dag,
 )
@@ -186,9 +220,22 @@ create_HiveTable_all_magic_cards = HiveOperator(
     dag=dag,
 ) 
 
+create_HiveTable_foreign_magic_cards = HiveOperator(
+    task_id='create_foreign_magic_cards_table',
+    hql=hiveSQL_create_table_foreign_cards,
+    hive_cli_conn_id='beeline',
+    dag=dag,
+) 
+
 addPartition_HiveTable_all_cards = HiveOperator(
     task_id='addPartition_HiveTable_all_cards',
     hql=hiveSQL_add_partition_all_magic_cards,
+    hive_cli_conn_id='beeline',
+    dag=dag)
+
+addPartition_HiveTable_foreign_cards = HiveOperator(
+    task_id='addPartition_HiveTable_foreign_cards',
+    hql=hiveSQL_add_partition_foreign_magic_cards,
     hive_cli_conn_id='beeline',
     dag=dag)
 
@@ -197,6 +244,9 @@ dummy_op = DummyOperator(
         dag=dag)
 
 
-create_local_import_dir >> clear_local_import_dir 
-clear_local_import_dir >> download_all_magic_cards >> add_JAR_dependencies >> create_hdfs_all_cards_partition_dir >> hdfs_put_all_magic_cards >> drop_HiveTable_magic_cards >> create_HiveTable_all_magic_cards >> addPartition_HiveTable_all_cards >> dummy_op
-dummy_op
+create_local_import_dir >> clear_local_import_dir >> add_JAR_dependencies >> download_all_magic_cards
+download_all_magic_cards  >> create_hdfs_all_cards_partition_dir >> hdfs_put_all_magic_cards >> drop_HiveTable_magic_cards >> create_HiveTable_all_magic_cards >> addPartition_HiveTable_all_cards >> dummy_op
+
+download_all_magic_cards >> create_hdfs_foreign_cards_partition_dir >> hdfs_put_foreign_magic_cards >> drop_HiveTable_foreign_magic_cards >> create_HiveTable_foreign_magic_cards >> addPartition_HiveTable_foreign_cards >> dummy_op
+
+
