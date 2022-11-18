@@ -89,6 +89,22 @@ CREATE EXTERNAL TABLE IF NOT EXISTS foreign_magic_cards(
 ROW FORMAT SERDE 'org.apache.hive.hcatalog.data.JsonSerDe' STORED AS TEXTFILE LOCATION 'hdfs:///user/hadoop/mtg/raw/foreign_magic_cards';
 '''
 
+hiveSQL_create_magic_cards_reduced='''
+CREATE EXTERNAL TABLE IF NOT EXISTS magic_cards_reduced (
+    name STRING,
+    multiverseid STRING,
+    imageUrl STRING
+) ROW FORMAT DELIMITED FIELDS TERMINATED BY ',' STORED AS TEXTFILE LOCATION '/user/hadoop/mtg/final/magic_cards';
+'''
+
+hiveSQL_create_foreign_magic_cards_reduced='''
+CREATE EXTERNAL TABLE IF NOT EXISTS foreign_magic_cards_reduced (
+    name STRING,
+    multiverseid STRING,
+    imageUrl STRING
+) ROW FORMAT DELIMITED FIELDS TERMINATED BY ',' STORED AS TEXTFILE LOCATION '/user/hadoop/mtg/final/foreign_magic_cards';
+'''
+
 hiveSQL_add_partition_all_magic_cards='''
 ALTER TABLE magic_cards
 ADD IF NOT EXISTS partition(partition_year={{ macros.ds_format(ds, "%Y-%m-%d", "%Y")}}, partition_month={{ macros.ds_format(ds, "%Y-%m-%d", "%m")}}, partition_day={{ macros.ds_format(ds, "%Y-%m-%d", "%d")}})
@@ -114,6 +130,24 @@ DROP TABLE IF EXISTS magic_cards;
 
 hiveSQL_drop_foreign_cards_table='''
 DROP TABLE IF EXISTS foreign_magic_cards;
+'''
+
+hiveSQL_drop_cards_reduced_table='''
+DROP TABLE IF EXISTS magic_cards_reduced;
+'''
+
+hiveSQL_insert_foreign_cards_into_cards_reduced_table='''
+ADD JAR /home/hadoop/hive/lib/hive-hcatalog-core-3.1.2.jar;
+INSERT OVERWRITE TABLE magic_cards_reduced
+SELECT
+    m.name,
+    m.multiverseid,
+    a.imageUrl
+FROM
+    magic_cards m
+    JOIN foreign_magic_cards a ON (m.id = a.cardid)
+WHERE
+    a.language = "German";
 '''
 
 drop_HiveTable_magic_cards = HiveOperator(
@@ -239,14 +273,28 @@ addPartition_HiveTable_foreign_cards = HiveOperator(
     hive_cli_conn_id='beeline',
     dag=dag)
 
+create_HiveTable_magic_cards_reduced = HiveOperator(
+    task_id='create_magic_cards_reduced',
+    hql=hiveSQL_create_magic_cards_reduced,
+    hive_cli_conn_id='beeline',
+    dag=dag)
+
+hive_merge_foreign_and_magic_cards_in_reduced_table = HiveOperator(
+    task_id='hive_merge_foreign_and_magic_cards_in_reduced_table',
+    hql=hiveSQL_insert_foreign_cards_into_cards_reduced_table,
+    hive_cli_conn_id='beeline',
+    dag=dag)
+
+
 dummy_op = DummyOperator(
         task_id='dummy', 
         dag=dag)
 
 
 create_local_import_dir >> clear_local_import_dir >> add_JAR_dependencies >> download_all_magic_cards
+
 download_all_magic_cards  >> create_hdfs_all_cards_partition_dir >> hdfs_put_all_magic_cards >> drop_HiveTable_magic_cards >> create_HiveTable_all_magic_cards >> addPartition_HiveTable_all_cards >> dummy_op
 
 download_all_magic_cards >> create_hdfs_foreign_cards_partition_dir >> hdfs_put_foreign_magic_cards >> drop_HiveTable_foreign_magic_cards >> create_HiveTable_foreign_magic_cards >> addPartition_HiveTable_foreign_cards >> dummy_op
 
-
+dummy_op >> create_HiveTable_magic_cards_reduced >> hive_merge_foreign_and_magic_cards_in_reduced_table

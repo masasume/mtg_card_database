@@ -260,6 +260,9 @@ hive_insert_overwrite_cards_reduced = HiveOperator(
     dag=dag)
 
 create_local_import_dir >> clear_local_import_dir >> download_mtg_cards
+
 download_mtg_cards >> create_cards_dir >> hdfs_put_cards >> delete_HiveTable_cards >> create_HiveTable_cards >> dummy_op
+
 download_mtg_cards >> create_foreign_cards_dir >> hdfs_put_foreign_cards >> delete_HiveTable_foreign_cards >> create_HiveTable_foreign_cards >> dummy_op
+
 dummy_op >> create_HiveTable_cards_reduced >> add_JAR_dependencies >> hive_insert_overwrite_cards_reduced
