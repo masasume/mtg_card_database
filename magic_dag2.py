@@ -2,13 +2,16 @@
 # create or edit with:
 # vi /home/airflow/airflow/dags/magic_dag.py
 # %d - delete all text in vim -> strg v this code to test it via airflow
-# Total amount of work: 11 Hours
+# Total amount of work: 15 Hours
 
 # Du musst das erstellten der zweiten Table für foreign_cards und die add_partition hinzufügen, bzw. fixen.
 
 import requests
 import json
 from datetime import datetime
+import subprocess
+import sys
+
 from airflow import DAG
 from airflow.operators.dummy_operator import DummyOperator
 from airflow.contrib.operators.spark_submit_operator import SparkSubmitOperator
@@ -32,6 +35,32 @@ dag = DAG(
     start_date=datetime(2019, 10, 16),
     catchup=False,
     max_active_runs=1,
+)
+
+#install mysql-connector
+def install():
+    subprocess.call([sys.executable, "-m", "pip", "install", 'mysql-connector-python'])
+
+# call python function with PythonOperator
+installMySQLConnector = PythonOperator(
+    task_id="installMySQLConnector", python_callable=install, dag=dag
+)
+
+def createMySQLUserTable():
+    import mysql.connector
+    mydb = mysql.connector.connect(
+    host="0.0.0.0",
+    user="root",
+    password="MagicPassword"
+    )
+    cursor = mydb.cursor()
+    sql_create_db = "Create database userMagicCards"
+    cursor.execute(sql_create_db)
+    mydb.close()
+
+# call python function with PythonOperator
+CreateMySQLUserTable = PythonOperator(
+    task_id="CreateMySQLUserTable", python_callable=createMySQLUserTable, dag=dag
 )
 
 hiveSQL_add_Jar_dependency='''
@@ -212,6 +241,8 @@ def getForeignCards(cards):
                 foreignCards.append(foreignCard)
     return foreignCards
 
+
+
 # call python function with PythonOperator
 download_all_magic_cards = PythonOperator(
     task_id="download_all_magic_cards", python_callable=getAllMTGCards, dag=dag
@@ -291,10 +322,12 @@ dummy_op = DummyOperator(
         dag=dag)
 
 
-create_local_import_dir >> clear_local_import_dir >> add_JAR_dependencies >> download_all_magic_cards
+create_local_import_dir >> clear_local_import_dir >> add_JAR_dependencies >> installMySQLConnector >> CreateMySQLUserTable >> download_all_magic_cards
 
 download_all_magic_cards  >> create_hdfs_all_cards_partition_dir >> hdfs_put_all_magic_cards >> drop_HiveTable_magic_cards >> create_HiveTable_all_magic_cards >> addPartition_HiveTable_all_cards >> dummy_op
 
 download_all_magic_cards >> create_hdfs_foreign_cards_partition_dir >> hdfs_put_foreign_magic_cards >> drop_HiveTable_foreign_magic_cards >> create_HiveTable_foreign_magic_cards >> addPartition_HiveTable_foreign_cards >> dummy_op
 
 dummy_op >> create_HiveTable_magic_cards_reduced >> hive_merge_foreign_and_magic_cards_in_reduced_table
+
+
