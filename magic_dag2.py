@@ -2,9 +2,11 @@
 # create or edit with:
 # vi /home/airflow/airflow/dags/magic_dag.py
 # %d - delete all text in vim -> strg v this code to test it via airflow
-# Total amount of work: 15 Hours
+# Total amount of work: 16 Hours
 
 # Du musst das erstellten der zweiten Table für foreign_cards und die add_partition hinzufügen, bzw. fixen.
+# define Google Cloud IP to allow ssh-connection
+GCloudIp = "34.105.131.120"
 
 import requests
 import json
@@ -37,31 +39,14 @@ dag = DAG(
     max_active_runs=1,
 )
 
-#install mysql-connector
-def install():
+#install dependencies
+def installDependencies():
+    # subprocess.call([sys.executable, "-m", "pip", "install", "--upgrade",  "pip"])
     subprocess.call([sys.executable, "-m", "pip", "install", 'mysql-connector-python'])
-
-# call python function with PythonOperator
-installMySQLConnector = PythonOperator(
-    task_id="installMySQLConnector", python_callable=install, dag=dag
-)
-
-def createMySQLUserTable():
-    import mysql.connector
-    mydb = mysql.connector.connect(
-    host="0.0.0.0",
-    user="root",
-    password="MagicPassword"
-    )
-    cursor = mydb.cursor()
-    sql_create_db = "Create database userMagicCards"
-    cursor.execute(sql_create_db)
-    mydb.close()
-
-# call python function with PythonOperator
-CreateMySQLUserTable = PythonOperator(
-    task_id="CreateMySQLUserTable", python_callable=createMySQLUserTable, dag=dag
-)
+    subprocess.call([sys.executable, "-m", "pip", "install", 'paramiko'])
+    subprocess.call([sys.executable, "-m", "pip", "install", 'pandas'])
+    subprocess.call([sys.executable, "-m", "pip", "install", 'python3-pymysql'])
+    subprocess.call([sys.executable, "-m", "pip", "install", 'sshtunnel'])
 
 hiveSQL_add_Jar_dependency='''
 ADD JAR /home/hadoop/hive/lib/hive-hcatalog-core-3.1.2.jar;
@@ -72,6 +57,59 @@ add_JAR_dependencies = HiveOperator(
     hql=hiveSQL_add_Jar_dependency,
     hive_cli_conn_id='beeline',
     dag=dag)
+
+# call python function with PythonOperator
+installPipDependencies = PythonOperator(
+    task_id="installPipDependencies", python_callable=installDependencies, dag=dag
+)
+
+def create_mysql_magic_enduser_database():
+    execute_mysql_ssh_query(query="CREATE DATABASE IF NOT EXISTS MagicTheGathering;", database_name="")
+
+def mySQL_drop_user_magic_cards_table():
+    query = '''DROP TABLE IF EXISTS user_magic_cards;'''
+    execute_mysql_ssh_query(query, "MagicTheGathering")
+
+def create_mysql_user_magic_cards_table():
+    query = '''CREATE TABLE IF NOT EXISTS user_magic_cards (
+        name VARCHAR(60),
+        multiverseid VARCHAR(10),
+        imageUrl VARCHAR(150)
+    );'''
+    execute_mysql_ssh_query(query, database_name="MagicTheGathering")
+
+def execute_mysql_ssh_query(query, database_name):
+    import pymysql
+    import paramiko
+    import pandas as pd
+    from paramiko import SSHClient
+    from sshtunnel import SSHTunnelForwarder
+
+    import mysql.connector
+    # create with vim a ssh file for the private key
+    mypkey = paramiko.RSAKey.from_private_key_file('/home/airflow/airflow/dags/keyfile.txt')
+    # if you want to use ssh password use - ssh_password='your ssh password', bellow
+    sql_hostname = '172.17.0.2'
+    sql_username = 'root'
+    sql_password = 'MagicPassword'
+    sql_main_database = database_name
+    sql_port = 3306
+    ssh_host = GCloudIp
+    ssh_user = 'kaczynskilucas'
+    ssh_port = 22
+ 
+    with SSHTunnelForwarder(
+        (ssh_host, ssh_port),
+        ssh_username=ssh_user,
+        ssh_pkey=mypkey,
+        remote_bind_address=(sql_hostname, sql_port)) as tunnel:
+        conn = pymysql.connect(host='127.0.0.1', user=sql_username,
+                passwd=sql_password, db=sql_main_database,
+                port=tunnel.local_bind_port)
+        cursor = conn.cursor()
+        cursor.execute(query)
+        cursor.close()
+        conn.close()
 
 hiveSQL_create_table_all_cards='''
 CREATE EXTERNAL TABLE IF NOT EXISTS magic_cards(
@@ -321,8 +359,29 @@ dummy_op = DummyOperator(
         task_id='dummy', 
         dag=dag)
 
+delete_MySQLTable_user_magic_cards = PythonOperator(
+    task_id='delete_mysql_user_magic_cards_table',
+    python_callable = mySQL_drop_user_magic_cards_table,
+    op_kwargs = {},
+    dag=dag
+)
 
-create_local_import_dir >> clear_local_import_dir >> add_JAR_dependencies >> installMySQLConnector >> CreateMySQLUserTable >> download_all_magic_cards
+create_mysql_magic_enduser_database = PythonOperator(
+    task_id='create_mysql_magic_enduser_database',
+    python_callable = create_mysql_magic_enduser_database,
+    op_kwargs = {},
+    dag=dag
+)
+
+mySQL_create_user_magic_cards_table = PythonOperator(
+    task_id='mySQL_create_user_magic_cards_table',
+    python_callable = create_mysql_user_magic_cards_table,
+    op_kwargs = {},
+    dag=dag
+)
+
+
+installPipDependencies >> create_mysql_magic_enduser_database  >> delete_MySQLTable_user_magic_cards >> mySQL_create_user_magic_cards_table >> create_local_import_dir >> clear_local_import_dir >> add_JAR_dependencies >> download_all_magic_cards
 
 download_all_magic_cards  >> create_hdfs_all_cards_partition_dir >> hdfs_put_all_magic_cards >> drop_HiveTable_magic_cards >> create_HiveTable_all_magic_cards >> addPartition_HiveTable_all_cards >> dummy_op
 
