@@ -2,7 +2,7 @@
 # create or edit with:
 # vi /home/airflow/airflow/dags/magic_dag.py
 # %d - delete all text in vim -> strg v this code to test it via airflow
-# Total amount of work: 16 Hours
+# Total amount of work: 22 Hours
 
 # Du musst das erstellten der zweiten Table für foreign_cards und die add_partition hinzufügen, bzw. fixen.
 # define Google Cloud IP to allow ssh-connection
@@ -41,7 +41,6 @@ dag = DAG(
 
 #install dependencies
 def installDependencies():
-    # subprocess.call([sys.executable, "-m", "pip", "install", "--upgrade",  "pip"])
     subprocess.call([sys.executable, "-m", "pip", "install", 'mysql-connector-python'])
     subprocess.call([sys.executable, "-m", "pip", "install", 'paramiko'])
     subprocess.call([sys.executable, "-m", "pip", "install", 'pandas'])
@@ -78,6 +77,12 @@ def create_mysql_user_magic_cards_table():
     );'''
     execute_mysql_ssh_query(query, database_name="MagicTheGathering")
 
+# def import_magic_cards():
+#     query = '''MagicTheGathering --import /user/hadoop/mtg/final/magic_cards/000000_0.json user_magic_cards_reduced;
+#     '''
+#     execute_mysql_ssh_query(query, database_name="MagicTheGathering")
+    
+
 def execute_mysql_ssh_query(query, database_name):
     import pymysql
     import paramiko
@@ -88,7 +93,6 @@ def execute_mysql_ssh_query(query, database_name):
     import mysql.connector
     # create with vim a ssh file for the private key
     mypkey = paramiko.RSAKey.from_private_key_file('/home/airflow/airflow/dags/keyfile.txt')
-    # if you want to use ssh password use - ssh_password='your ssh password', bellow
     sql_hostname = '172.17.0.2'
     sql_username = 'root'
     sql_password = 'MagicPassword'
@@ -110,6 +114,12 @@ def execute_mysql_ssh_query(query, database_name):
         cursor.execute(query)
         cursor.close()
         conn.close()
+
+# hiveSQL_export_magic_cards_reduced_to_csv='''
+# set hive.cli.print.header=true;
+# insert overwrite directory '/home/airflow/airflow/dags/' 
+# select * from magic_cards_reduced;
+# '''
 
 hiveSQL_create_table_all_cards='''
 CREATE EXTERNAL TABLE IF NOT EXISTS magic_cards(
@@ -161,7 +171,12 @@ CREATE EXTERNAL TABLE IF NOT EXISTS magic_cards_reduced (
     name STRING,
     multiverseid STRING,
     imageUrl STRING
-) ROW FORMAT DELIMITED FIELDS TERMINATED BY ',' STORED AS TEXTFILE LOCATION '/user/hadoop/mtg/final/magic_cards';
+) ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'
+WITH SERDEPROPERTIES (
+    "separatorChar" = ",",
+    "quoteChar" = '"'
+    )
+    STORED AS TEXTFILE LOCATION '/user/hadoop/mtg/final/magic_cards';
 '''
 
 hiveSQL_create_foreign_magic_cards_reduced='''
@@ -321,7 +336,14 @@ create_HiveTable_all_magic_cards = HiveOperator(
     hql=hiveSQL_create_table_all_cards,
     hive_cli_conn_id='beeline',
     dag=dag,
-) 
+)
+
+# hiveSQL_export_magic_cards_reduced_to_csv = HiveOperator(
+#     task_id='export_magic_cards_reduced_to_csv',
+#     hql=hiveSQL_export_magic_cards_reduced_to_csv,
+#     hive_cli_conn_id='beeline',
+#     dag=dag,
+# )
 
 create_HiveTable_foreign_magic_cards = HiveOperator(
     task_id='create_foreign_magic_cards_table',
@@ -380,13 +402,11 @@ mySQL_create_user_magic_cards_table = PythonOperator(
     dag=dag
 )
 
-
-installPipDependencies >> create_mysql_magic_enduser_database  >> delete_MySQLTable_user_magic_cards >> mySQL_create_user_magic_cards_table >> create_local_import_dir >> clear_local_import_dir >> add_JAR_dependencies >> download_all_magic_cards
+installPipDependencies
+create_mysql_magic_enduser_database  >> delete_MySQLTable_user_magic_cards >> mySQL_create_user_magic_cards_table >> create_local_import_dir >> clear_local_import_dir >> add_JAR_dependencies >> download_all_magic_cards
 
 download_all_magic_cards  >> create_hdfs_all_cards_partition_dir >> hdfs_put_all_magic_cards >> drop_HiveTable_magic_cards >> create_HiveTable_all_magic_cards >> addPartition_HiveTable_all_cards >> dummy_op
 
 download_all_magic_cards >> create_hdfs_foreign_cards_partition_dir >> hdfs_put_foreign_magic_cards >> drop_HiveTable_foreign_magic_cards >> create_HiveTable_foreign_magic_cards >> addPartition_HiveTable_foreign_cards >> dummy_op
 
 dummy_op >> create_HiveTable_magic_cards_reduced >> hive_merge_foreign_and_magic_cards_in_reduced_table
-
-
