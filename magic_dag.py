@@ -2,11 +2,10 @@
 # create or edit with:
 # vi /home/airflow/airflow/dags/magic_dag.py
 # %d - delete all text in vim -> strg v this code to test it via airflow
-# Total amount of work: 22 Hours
+# Total amount of work: 33 Hours
 
 # Für die Abgabe: Auf GitHub pushen, Docker erstellen, das es lauffähig ist.
 
-# Du musst das erstellten der zweiten Table für foreign_cards und die add_partition hinzufügen, bzw. fixen.
 # define Google Cloud IP to allow ssh-connection
 GCloudIp = "35.189.68.7"
 
@@ -67,11 +66,6 @@ def installDependencies():
 # creates the enduser database in the mysql server hosted on the mysql (MagicMySQL) docker container
 def create_mysql_magic_enduser_database():
     executeMySQLQueryViaSSH(query="CREATE DATABASE IF NOT EXISTS MagicTheGathering;", databaseName="")
-
-# to assure seemless updates we drop the user_magic_cards table and recreate it in the following function.
-def mySQL_drop_user_magic_cards_table():
-    query = '''DROP TABLE IF EXISTS user_magic_cards;'''
-    executeMySQLQueryViaSSH(query, "MagicTheGathering")
 
 # We create the user_magic_cards table in the mysql database.
 def create_mysql_user_magic_cards_table():
@@ -169,44 +163,32 @@ def load_data_from_hive_to_mysql():
 
 # we get all MTG Cards from the Magic-API. We give ds (curr. DateTime from airflow) via ds.
 def getAllMTGCards(ds, **kwargs):
-    webResponse = requests.get("https://api.magicthegathering.io/v1/cards?pageSize=100&page=1")
-    totalWebCount = webResponse.headers["Total-Count"]
-    totalWebCount = int((int(totalWebCount) / 100))
-    cards = webResponse.json()["cards"]
+    response = requests.get("https://api.magicthegathering.io/v1/cards?pageSize=100&page=1")
+    totalCount = response.headers["Total-Count"]
+    totalCount = int((int(totalCount) / 100))
+    cards = response.json()["cards"]
     foreignCards = getForeignCards(cards)
 
-    # we iterate over all pages and get all cards
-    for i in range(2, 3):
-        print(str(i) + "von" + str(totalWebCount))
-        webResponse = requests.get("https://api.magicthegathering.io/v1/cards?pageSize=100&page=" + str(i))
-        responseCards = webResponse.json()["cards"]
+    for i in range(2,totalCount):
+        print(str(i) + "von" + str(totalCount))
+        response = requests.get("https://api.magicthegathering.io/v1/cards?pageSize=100&page=" + str(i))
+        responseCards = response.json()["cards"]
         foreignCards = foreignCards + getForeignCards(responseCards)
-        cards = cards + webResponse.json()["cards"]
+        cards = cards + response.json()["cards"]
 
-    # we iterate over all foreign cards
     for i in range(len(cards)):
         if "foreignNames" in cards[i]:
             del cards[i]["foreignNames"]
+    
+    cardsJson = toJSON(cards)
+    text_file = open("/home/airflow/mtg/mtgcards_"+ds+".json", "w")
+    text_file.write(cardsJson)
 
-    # we write all cards (except foreign cards) to a json file and save it with the dateTime as filename
-    cardsInJson = toJSON(cards)
-    textFile = open("/home/airflow/mtg/mtgcards_"+ds+".json", "w")
-    textFile.write(cardsInJson)
-
-    # we write all foreign cards to a json file and save it with the dateTime as filename
-    foreignCardsInJson = toJSON(foreignCards)
-    textFile = open("/home/airflow/mtg/foreign_mtgcards_"+ds+".json", "w")
-    textFile.write(foreignCardsInJson)
+    foreignCardsJson = toJSON(foreignCards)
+    text_file = open("/home/airflow/mtg/foreign_mtgcards_"+ds+".json", "w")
+    text_file.write(foreignCardsJson)
     return
 
-# we serialize the objectdata to json string with json.dumps and enter with "\n" a new line for each card
-def toJSON(cards):
-    for i in range(len(cards)):
-        cards[i] = json.dumps(cards[i])
-    cardsInJson = ",\n".join(cards)
-    return cardsInJson
-
-# we iterate over all cards and get all foreign cards
 def getForeignCards(cards): 
     foreignCards = []
     for card in cards:
@@ -215,6 +197,61 @@ def getForeignCards(cards):
                 foreignCard["cardid"] = card["id"]
                 foreignCards.append(foreignCard)
     return foreignCards
+
+def toJSON(cards):
+    for i in range(len(cards)):
+        cards[i] = json.dumps(cards[i])
+    cardsJson = ",\n".join(cards)
+    return cardsJson
+
+# def getAllMTGCards(ds, **kwargs):
+#     webResponse = requests.get("https://api.magicthegathering.io/v1/cards?pageSize=100&page=1")
+#     totalWebCount = webResponse.headers["Total-Count"]
+#     totalWebCount = int((int(totalWebCount) / 100))
+#     print("1" + " von " + str(totalWebCount))
+#     cards = webResponse.json()["cards"]
+#     foreignCards = getForeignCards(cards)
+
+#     # we iterate over all pages and get all cards
+#     for i in range(2, totalWebCount-1):
+#         print(str(i) + " von " + str(totalWebCount))
+#         webResponse = requests.get("https://api.magicthegathering.io/v1/cards?pageSize=100&page=" + str(i))
+#         responseCards = webResponse.json()["cards"]
+#         foreignCards = foreignCards + getForeignCards(responseCards)
+#         cards = cards + webResponse.json()["cards"]
+
+#     # we iterate over all foreign cards
+#     for i in range(len(cards)):
+#         if "foreignNames" in cards[i]:
+#             del cards[i]["foreignNames"]
+
+#     # we write all cards (except foreign cards) to a json file and save it with the dateTime as filename
+#     cardsInJson = toJSON(cards)
+#     textFile = open("/home/airflow/mtg/mtgcards_"+ds+".json", "w")
+#     textFile.write(cardsInJson)
+
+#     # we write all foreign cards to a json file and save it with the dateTime as filename
+#     foreignCardsInJson = toJSON(foreignCards)
+#     textFile = open("/home/airflow/mtg/foreign_mtgcards_"+ds+".json", "w")
+#     textFile.write(foreignCardsInJson)
+#     return
+
+# # we serialize the objectdata to json string with json.dumps and enter with "\n" a new line for each card
+# def toJSON(cards):
+#     for i in range(len(cards)):
+#         cards[i] = json.dumps(cards[i])
+#     cardsInJson = ",\n".join(cards)
+#     return cardsInJson
+
+# # we iterate over all cards and get all foreign cards
+# def getForeignCards(cards): 
+#     foreignCards = []
+#     for card in cards:
+#         if "foreignNames" in card:
+#             for foreignCard in card["foreignNames"]:
+#                 foreignCard["cardid"] = card["id"]
+#                 foreignCards.append(foreignCard)
+#     return foreignCards
 
 # this hive sql query creates the table magic_cards and fills it with the data from the json file from hdfs:///user/hadoop/mtg/raw/magic_cards'.
 # we read the json with JsonSerDe
@@ -292,27 +329,13 @@ ADD IF NOT EXISTS partition(partition_year={{ macros.ds_format(ds, "%Y-%m-%d", "
 LOCATION '/user/hadoop/mtg/raw/foreign_magic_cards/{{ macros.ds_format(ds, "%Y-%m-%d", "%Y")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%m")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%d")}}';
 '''
 
-# drops the table magic_cards
-hiveSQL_drop_cards_table='''
-DROP TABLE IF EXISTS magic_cards;
-'''
-
-# drops the table foreign_magic_cards
-hiveSQL_drop_foreign_cards_table='''
-DROP TABLE IF EXISTS foreign_magic_cards;
-'''
-
-# drops the table magic_cards_reduced
-hiveSQL_drop_cards_reduced_table='''
-DROP TABLE IF EXISTS magic_cards_reduced;
-'''
-
 # merges the data from the table magic_cards and foreign_magic_cards into the table magic_cards_reduced.
 # it only imports the attributes needed for the enduser
+# with SELECT DISTINCT we make sure that we only have unique entries
 hiveSQL_insert_foreign_cards_into_cards_reduced_table='''
 ADD JAR /home/hadoop/hive/lib/hive-hcatalog-core-3.1.2.jar;
 INSERT OVERWRITE TABLE magic_cards_reduced
-SELECT
+SELECT DISTINCT
     m.name,
     m.multiverseid,
     a.imageUrl
@@ -337,35 +360,6 @@ clear_local_import_dir = ClearDirectoryOperator(
     directory="/home/airflow/mtg/",
     pattern="*",
     dag=dag,
-)
-
-# calls the hive sql to drop the hive table magic_cards
-drop_HiveTable_magic_cards = HiveOperator(
-    task_id='drop_HiveTable_magic_cards',
-    hql=hiveSQL_drop_cards_table,
-    hive_cli_conn_id='beeline',
-    dag=dag)
-
-# calls the hive sql to drop the hive table foreign_magic_cards
-drop_HiveTable_foreign_magic_cards = HiveOperator(
-    task_id='drop_HiveTable_foreign_magic_cards',
-    hql=hiveSQL_drop_foreign_cards_table,
-    hive_cli_conn_id='beeline',
-    dag=dag)
-
-# calls the hive sql to drop the hive table magic_cards_reduced
-drop_HiveTable_magic_cards_reduced = HiveOperator(
-    task_id='drop_HiveTable_magic_cards_reduced',
-    hql=hiveSQL_drop_cards_reduced_table,
-    hive_cli_conn_id='beeline',
-    dag=dag)
-
-# call the hive sql to drop the table magic_cards
-delete_MySQLTable_user_magic_cards = PythonOperator(
-    task_id='delete_mysql_user_magic_cards_table',
-    python_callable = mySQL_drop_user_magic_cards_table,
-    op_kwargs = {},
-    dag=dag
 )
 
 # creates a partioned directory structure on hdfs for magic_cards to save data based on year, month and day
@@ -495,8 +489,8 @@ installPipDependencies = PythonOperator(
 
 installPipDependencies >> create_local_import_dir >> clear_local_import_dir >> add_JAR_dependencies >> download_all_magic_cards
 
-download_all_magic_cards  >> create_hdfs_all_cards_partition_dir >> hdfs_put_all_magic_cards >> drop_HiveTable_magic_cards >> create_HiveTable_magic_cards >> addPartition_HiveTable_magic_cards >> dummy_op
+download_all_magic_cards  >> create_hdfs_all_cards_partition_dir >> hdfs_put_all_magic_cards  >> create_HiveTable_magic_cards >> addPartition_HiveTable_magic_cards >> dummy_op
 
-download_all_magic_cards >> create_hdfs_foreign_cards_partition_dir >> hdfs_put_foreign_magic_cards >> drop_HiveTable_foreign_magic_cards >> create_HiveTable_foreign_magic_cards >> addPartition_HiveTable_foreign_cards >> dummy_op
+download_all_magic_cards >> create_hdfs_foreign_cards_partition_dir >> hdfs_put_foreign_magic_cards  >> create_HiveTable_foreign_magic_cards >> addPartition_HiveTable_foreign_cards >> dummy_op
 
-dummy_op >> drop_HiveTable_magic_cards_reduced >> create_HiveTable_magic_cards_reduced >> hive_merge_foreign_and_magic_cards_in_reduced_table >> create_mysql_magic_enduser_database >> delete_MySQLTable_user_magic_cards >> mySQL_create_user_magic_cards_table >> load_data_hive_to_mysql_mtg_cards
+dummy_op  >> create_HiveTable_magic_cards_reduced >> hive_merge_foreign_and_magic_cards_in_reduced_table >> create_mysql_magic_enduser_database >> mySQL_create_user_magic_cards_table >> load_data_hive_to_mysql_mtg_cards
