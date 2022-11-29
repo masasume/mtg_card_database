@@ -66,7 +66,7 @@ def installDependencies():
 
 # creates the enduser database in the mysql server hosted on the mysql (MagicMySQL) docker container
 def create_mysql_magic_enduser_database():
-    execute_mysql_ssh_query(query="CREATE DATABASE IF NOT EXISTS MagicTheGathering;", database_name="")
+    execute_mysql_ssh_query(query="CREATE DATABASE IF NOT EXISTS MagicTheGathering;", databaseName="")
 
 # to assure seemless updates we drop the user_magic_cards table and recreate it in the following function.
 def mySQL_drop_user_magic_cards_table():
@@ -80,10 +80,10 @@ def create_mysql_user_magic_cards_table():
         multiverseid VARCHAR(10),
         imageUrl VARCHAR(150)
     );'''
-    execute_mysql_ssh_query(query, database_name="MagicTheGathering")
+    execute_mysql_ssh_query(query, databaseName="MagicTheGathering")
 
-# We use ssh to connect to the mysql docker container and execute the query. data is 
-def execute_mysql_ssh_query(query, database_name, dataStream=None):
+# We use ssh to connect to the mysql docker container and execute the query. dataStream is empty by default. If we want to send data to the mysql server we have to pass data via the dataStream parameter.
+def execute_mysql_ssh_query(query, databaseName, dataStream=None):
     import pymysql
     import paramiko
     import pandas as pd
@@ -91,17 +91,18 @@ def execute_mysql_ssh_query(query, database_name, dataStream=None):
     from sshtunnel import SSHTunnelForwarder
 
     import mysql.connector
-    # create with vim a ssh file for the private key
+    # path to the private_key to connect to the mysql docker container
     mypkey = paramiko.RSAKey.from_private_key_file('/home/airflow/airflow/dags/keyfile.txt')
     sql_hostname = '172.17.0.2'
     sql_username = 'root'
     sql_password = 'MagicPassword'
-    sql_main_database = database_name
+    sql_main_database = databaseName
     sql_port = 3306
     ssh_host = GCloudIp
     ssh_user = 'kaczynskilucas'
     ssh_port = 22
- 
+    
+    # We use the SSHTunnelForwarder to connect to the mysql docker container via ssh
     with SSHTunnelForwarder(
         (ssh_host, ssh_port),
         ssh_username=ssh_user,
@@ -119,7 +120,9 @@ def execute_mysql_ssh_query(query, database_name, dataStream=None):
         cursor.close()
         conn.close()
 
+# this get's the data of the table magic_cards_reduced from the hive database and writes it to the mysql MagicTheGathering database.
 def get_hive_table_data(query):
+    # we import the
     import pymysql
     import paramiko
     import pandas as pd
@@ -138,6 +141,7 @@ def get_hive_table_data(query):
     hive_port = 10000
     hive_user = "hadoop"
     
+    # We use the SSHTunnelForwarder to connect to the mysql docker container via ssh
     with SSHTunnelForwarder(
         (ssh_host, ssh_port),
         ssh_username=ssh_user,
@@ -158,7 +162,7 @@ def load_data_from_hive_to_mysql():
     hive_data = get_hive_table_data(hive_fetch_query)
     
     mysql_insert_query = '''INSERT INTO user_magic_cards(name, multiverseid, imageurl) VALUES (%s, %s, %s)'''
-    execute_mysql_ssh_query(query=mysql_insert_query, database_name="MagicTheGathering", dataStream=hive_data)
+    execute_mysql_ssh_query(query=mysql_insert_query, databaseName="MagicTheGathering", dataStream=hive_data)
 
 # Übergebe das aktuelle Datum Airflow via {{ ds }}
 def getAllMTGCards(ds, **kwargs):
