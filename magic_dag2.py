@@ -4,23 +4,21 @@
 # %d - delete all text in vim -> strg v this code to test it via airflow
 # Total amount of work: 22 Hours
 
-# needs to be run twice to work!
+# Für die Abgabe: Auf GitHub pushen, Docker erstellen, das es lauffähig ist.
 
 # Du musst das erstellten der zweiten Table für foreign_cards und die add_partition hinzufügen, bzw. fixen.
 # define Google Cloud IP to allow ssh-connection
-GCloudIp = "35.246.117.16"
+GCloudIp = "35.189.68.7"
 
-# CSV exportieren hive -e 'select * from your_Table' | sed 's/[\t]/,/g'  > /home/yourfile.csv doesn't work
-# INSERT OVERWRITE LOCAL DIRECTORY '/home/lvermeer/temp' ROW FORMAT DELIMITED FIELDS TERMINATED BY ',' select * from table; doesnt create a file
-# Für Sqoop benötigen wir ein Passwort
-# hive -e 'select * from your_Table' | sed 's/[\t]/,/g'  > /home/yourfile.csv
-# wenn Dateipfad auf Airflow angegben wurde, dann erstellt er nichts
-# wenn Dateipfad auf Hive angegeben wurde, dann sagt er, das er die Datei namens Hive nicht findet.
-
+# is needed to use GET requests
 import requests
+# we use this to read and handle the received json files from the API
 import json
+# used to get the current date and time
 from datetime import datetime
+# used to install pip dependencies over the console. Subprocess opens a new console and executes the command
 import subprocess
+# used send a command to the console and run it
 import sys
 
 from airflow import DAG
@@ -38,6 +36,7 @@ args = {
     'owner': 'airflow'
 }
 
+# name of the dag in airflow and it's attributes
 dag = DAG(
     "MagicDAG",
     default_args=args,
@@ -48,7 +47,12 @@ dag = DAG(
     max_active_runs=1,
 )
 
-#install dependencies
+# We need this import to use ROW FORMAT SERDE to serialize the json file.
+hiveSQL_add_Jar_dependency='''
+ADD JAR /home/hadoop/hive/lib/hive-hcatalog-core-3.1.2.jar;
+'''
+
+#install pip dependencies. This is included in the dag for ease of use on new machines. But it should be excluded after the first run, because it takes approx. 20 seconds to check all allready installed pip files.
 def installDependencies():
     subprocess.call([sys.executable, "-m", "pip", "install", 'mysql-connector-python'])
     subprocess.call([sys.executable, "-m", "pip", "install", 'paramiko'])
@@ -60,28 +64,16 @@ def installDependencies():
     subprocess.call([sys.executable, "-m", "pip", "install", 'pyhive'])
     subprocess.call([sys.executable, "-m", "pip", "install", 'thrift-sasl'])
 
-hiveSQL_add_Jar_dependency='''
-ADD JAR /home/hadoop/hive/lib/hive-hcatalog-core-3.1.2.jar;
-'''
-
-add_JAR_dependencies = HiveOperator(
-    task_id='add_jar_dependencies',
-    hql=hiveSQL_add_Jar_dependency,
-    hive_cli_conn_id='beeline',
-    dag=dag)
-
-# call python function with PythonOperator
-installPipDependencies = PythonOperator(
-    task_id="installPipDependencies", python_callable=installDependencies, dag=dag
-)
-
+# creates the enduser database in the mysql server hosted on the mysql (MagicMySQL) docker container
 def create_mysql_magic_enduser_database():
     execute_mysql_ssh_query(query="CREATE DATABASE IF NOT EXISTS MagicTheGathering;", database_name="")
 
+# to assure seemless updates we drop the user_magic_cards table and recreate it in the following function.
 def mySQL_drop_user_magic_cards_table():
     query = '''DROP TABLE IF EXISTS user_magic_cards;'''
     execute_mysql_ssh_query(query, "MagicTheGathering")
 
+# We create the user_magic_cards table in the mysql database.
 def create_mysql_user_magic_cards_table():
     query = '''CREATE TABLE IF NOT EXISTS user_magic_cards (
         name VARCHAR(60),
@@ -90,8 +82,8 @@ def create_mysql_user_magic_cards_table():
     );'''
     execute_mysql_ssh_query(query, database_name="MagicTheGathering")
 
- 
-def execute_mysql_ssh_query(query, database_name, data=None):
+# We use ssh to connect to the mysql docker container and execute the query. data is 
+def execute_mysql_ssh_query(query, database_name, dataStream=None):
     import pymysql
     import paramiko
     import pandas as pd
@@ -119,8 +111,8 @@ def execute_mysql_ssh_query(query, database_name, data=None):
                 passwd=sql_password, db=sql_main_database,
                 port=tunnel.local_bind_port)
         cursor = conn.cursor()
-        if data!=None:
-            cursor.executemany(query, data)
+        if dataStream!=None:
+            cursor.executemany(query, dataStream)
             conn.commit()
         else:
             cursor.execute(query)
@@ -166,7 +158,51 @@ def load_data_from_hive_to_mysql():
     hive_data = get_hive_table_data(hive_fetch_query)
     
     mysql_insert_query = '''INSERT INTO user_magic_cards(name, multiverseid, imageurl) VALUES (%s, %s, %s)'''
-    execute_mysql_ssh_query(query=mysql_insert_query, database_name="MagicTheGathering", data=hive_data)
+    execute_mysql_ssh_query(query=mysql_insert_query, database_name="MagicTheGathering", dataStream=hive_data)
+
+# Übergebe das aktuelle Datum Airflow via {{ ds }}
+def getAllMTGCards(ds, **kwargs):
+    response = requests.get("https://api.magicthegathering.io/v1/cards?pageSize=100&page=1")
+    totalCount = response.headers["Total-Count"]
+    totalCount = int((int(totalCount) / 100))
+    cards = response.json()["cards"]
+    foreignCards = getForeignCards(cards)
+
+    for i in range(2, 3):
+        print(str(i) + "von" + str(totalCount))
+        response = requests.get("https://api.magicthegathering.io/v1/cards?pageSize=100&page=" + str(i))
+        responseCards = response.json()["cards"]
+        foreignCards = foreignCards + getForeignCards(responseCards)
+        cards = cards + response.json()["cards"]
+
+    for i in range(len(cards)):
+        if "foreignNames" in cards[i]:
+            del cards[i]["foreignNames"]
+
+    cardsJson = toJSON(cards)
+    text_file = open("/home/airflow/mtg/mtgcards_"+ds+".json", "w")
+    text_file.write(cardsJson)
+
+    foreignCardsJson = toJSON(foreignCards)
+    text_file = open("/home/airflow/mtg/foreign_mtgcards_"+ds+".json", "w")
+    text_file.write(foreignCardsJson)
+    return
+
+def toJSON(cards):
+    for i in range(len(cards)):
+        cards[i] = json.dumps(cards[i])
+    cardsJson = ",\n".join(cards)
+    return cardsJson
+
+def getForeignCards(cards): 
+    foreignCards = []
+    for card in cards:
+        if "foreignNames" in card:
+            for foreignCard in card["foreignNames"]:
+                foreignCard["cardid"] = card["id"]
+                foreignCards.append(foreignCard)
+    return foreignCards
+
 
 hiveSQL_create_table_all_cards='''
 CREATE EXTERNAL TABLE IF NOT EXISTS magic_cards(
@@ -238,13 +274,6 @@ ADD IF NOT EXISTS partition(partition_year={{ macros.ds_format(ds, "%Y-%m-%d", "
 LOCATION '/user/hadoop/mtg/raw/foreign_magic_cards/{{ macros.ds_format(ds, "%Y-%m-%d", "%Y")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%m")}}/{{ macros.ds_format(ds, "%Y-%m-%d", "%d")}}';
 '''
 
-create_local_import_dir = CreateDirectoryOperator(
-    task_id="create_import_dir",
-    path="/home/airflow/",
-    directory="mtg",
-    dag=dag,
-)
-
 hiveSQL_drop_cards_table='''
 DROP TABLE IF EXISTS magic_cards;
 '''
@@ -271,6 +300,20 @@ WHERE
     a.language = "German";
 '''
 
+create_local_import_dir = CreateDirectoryOperator(
+    task_id="create_import_dir",
+    path="/home/airflow/",
+    directory="mtg",
+    dag=dag,
+)
+
+clear_local_import_dir = ClearDirectoryOperator(
+    task_id="clear_import_dir",
+    directory="/home/airflow/mtg/",
+    pattern="*",
+    dag=dag,
+)
+
 drop_HiveTable_magic_cards = HiveOperator(
     task_id='drop_HiveTable_magic_cards',
     hql=hiveSQL_drop_cards_table,
@@ -288,63 +331,6 @@ dop_HiveTable_magic_cards_reduced = HiveOperator(
     hql=hiveSQL_drop_cards_reduced_table,
     hive_cli_conn_id='beeline',
     dag=dag)
-
-clear_local_import_dir = ClearDirectoryOperator(
-    task_id="clear_import_dir",
-    directory="/home/airflow/mtg/",
-    pattern="*",
-    dag=dag,
-)
-# Übergebe das aktuelle Datum Airflow via {{ ds }}
-def getAllMTGCards(ds, **kwargs):
-    response = requests.get("https://api.magicthegathering.io/v1/cards?pageSize=100&page=1")
-    totalCount = response.headers["Total-Count"]
-    totalCount = int((int(totalCount) / 100))
-    cards = response.json()["cards"]
-    foreignCards = getForeignCards(cards)
-
-    for i in range(2, 3):
-        print(str(i) + "von" + str(totalCount))
-        response = requests.get("https://api.magicthegathering.io/v1/cards?pageSize=100&page=" + str(i))
-        responseCards = response.json()["cards"]
-        foreignCards = foreignCards + getForeignCards(responseCards)
-        cards = cards + response.json()["cards"]
-
-    for i in range(len(cards)):
-        if "foreignNames" in cards[i]:
-            del cards[i]["foreignNames"]
-
-    cardsJson = toJSON(cards)
-    text_file = open("/home/airflow/mtg/mtgcards_"+ds+".json", "w")
-    text_file.write(cardsJson)
-
-    foreignCardsJson = toJSON(foreignCards)
-    text_file = open("/home/airflow/mtg/foreign_mtgcards_"+ds+".json", "w")
-    text_file.write(foreignCardsJson)
-    return
-
-def toJSON(cards):
-    for i in range(len(cards)):
-        cards[i] = json.dumps(cards[i])
-    cardsJson = ",\n".join(cards)
-    return cardsJson
-
-def getForeignCards(cards): 
-    foreignCards = []
-    for card in cards:
-        if "foreignNames" in card:
-            for foreignCard in card["foreignNames"]:
-                foreignCard["cardid"] = card["id"]
-                foreignCards.append(foreignCard)
-    return foreignCards
-
-
-
-# call python function with PythonOperator
-download_all_magic_cards = PythonOperator(
-    task_id="download_all_magic_cards", provide_context=True, python_callable=getAllMTGCards, xcom_push=True,
-    dag=dag
-)
 
 create_hdfs_all_cards_partition_dir = HdfsMkdirFileOperator(
     task_id="mkdir_hdfs_raw_dir_magic_cards",
@@ -414,10 +400,22 @@ hive_merge_foreign_and_magic_cards_in_reduced_table = HiveOperator(
     hive_cli_conn_id='beeline',
     dag=dag)
 
+add_JAR_dependencies = HiveOperator(
+    task_id='add_jar_dependencies',
+    hql=hiveSQL_add_Jar_dependency,
+    hive_cli_conn_id='beeline',
+    dag=dag)
+
 
 dummy_op = DummyOperator(
         task_id='dummy', 
         dag=dag)
+
+# call python function with PythonOperator
+download_all_magic_cards = PythonOperator(
+    task_id="download_all_magic_cards", provide_context=True, python_callable=getAllMTGCards, xcom_push=True,
+    dag=dag
+)
 
 delete_MySQLTable_user_magic_cards = PythonOperator(
     task_id='delete_mysql_user_magic_cards_table',
@@ -447,10 +445,15 @@ load_data_hive_to_mysql_mtg_cards = PythonOperator(
     dag=dag
 )
 
-installPipDependencies >> create_mysql_magic_enduser_database  >> delete_MySQLTable_user_magic_cards >> mySQL_create_user_magic_cards_table >> create_local_import_dir >> clear_local_import_dir >> add_JAR_dependencies >> download_all_magic_cards
+# call python function with PythonOperator
+installPipDependencies = PythonOperator(
+    task_id="installPipDependencies", python_callable=installDependencies, dag=dag
+)
+
+installPipDependencies >> create_local_import_dir >> clear_local_import_dir >> add_JAR_dependencies >> download_all_magic_cards
 
 download_all_magic_cards  >> create_hdfs_all_cards_partition_dir >> hdfs_put_all_magic_cards >> drop_HiveTable_magic_cards >> create_HiveTable_all_magic_cards >> addPartition_HiveTable_all_cards >> dummy_op
 
 download_all_magic_cards >> create_hdfs_foreign_cards_partition_dir >> hdfs_put_foreign_magic_cards >> drop_HiveTable_foreign_magic_cards >> create_HiveTable_foreign_magic_cards >> addPartition_HiveTable_foreign_cards >> dummy_op
 
-dummy_op >> dop_HiveTable_magic_cards_reduced >> create_HiveTable_magic_cards_reduced >> hive_merge_foreign_and_magic_cards_in_reduced_table >> load_data_hive_to_mysql_mtg_cards
+dummy_op >> dop_HiveTable_magic_cards_reduced >> create_HiveTable_magic_cards_reduced >> hive_merge_foreign_and_magic_cards_in_reduced_table >> create_mysql_magic_enduser_database >> delete_MySQLTable_user_magic_cards >> mySQL_create_user_magic_cards_table >> load_data_hive_to_mysql_mtg_cards
