@@ -10,7 +10,7 @@ app.use(express.json());
 
 // Route to get all cards
 app.get("/api/get", (req, res) => {
-  db.query("SELECT * FROM user_magic_cards;", (err, result) => {
+  db.query("SELECT * FROM user_magic_cards limit 25;", (err, result) => {
     if (err) {
       console.log(err);
     }

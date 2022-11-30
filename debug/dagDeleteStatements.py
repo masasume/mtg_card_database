@@ -1,3 +1,5 @@
+# The following tasks are great to debug the airflow dag.
+
 # drops the table magic_cards
 hiveSQL_drop_cards_table='''
 DROP TABLE IF EXISTS magic_cards;
@@ -48,4 +50,4 @@ delete_MySQLTable_user_magic_cards = PythonOperator(
 )
 
 # drop all tables in hive and in mysql
-# drop_HiveTable_magic_cards >> drop_HiveTable_foreign_magic_cards >> drop_HiveTable_magic_cards_reduced >> delete_MySQLTable_user_magic_cards
+drop_HiveTable_magic_cards >> drop_HiveTable_foreign_magic_cards >> drop_HiveTable_magic_cards_reduced >> delete_MySQLTable_user_magic_cards
