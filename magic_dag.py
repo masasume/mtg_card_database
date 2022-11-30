@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
-# create or edit with:
+# create or edit dag with:
 # vi /home/airflow/airflow/dags/magic_dag.py
-# %d - delete all text in vim -> strg v this code to test it via airflow
 # Total amount of work: 33 Hours
 
 # Für die Abgabe: Auf GitHub pushen, Docker erstellen, das es lauffähig ist.
 
 # define Google Cloud IP to allow ssh-connection
-GCloudIp = "35.189.68.7"
+GCloudIp = "34.89.2.13"
 
 # is needed to use GET requests
 import requests
@@ -163,32 +162,45 @@ def load_data_from_hive_to_mysql():
 
 # we get all MTG Cards from the Magic-API. We give ds (curr. DateTime from airflow) via ds.
 def getAllMTGCards(ds, **kwargs):
-    response = requests.get("https://api.magicthegathering.io/v1/cards?pageSize=100&page=1")
-    totalCount = response.headers["Total-Count"]
-    totalCount = int((int(totalCount) / 100))
-    cards = response.json()["cards"]
+    webResponse = requests.get("https://api.magicthegathering.io/v1/cards?pageSize=100&page=1")
+    totalWebCount = webResponse.headers["Total-Count"]
+    totalWebCount = int((int(totalWebCount) / 100))
+    print("1" + " von " + str(totalWebCount))
+    cards = webResponse.json()["cards"]
     foreignCards = getForeignCards(cards)
 
-    for i in range(2,totalCount):
-        print(str(i) + "von" + str(totalCount))
-        response = requests.get("https://api.magicthegathering.io/v1/cards?pageSize=100&page=" + str(i))
-        responseCards = response.json()["cards"]
+    # we iterate over all pages and get all cards
+    for i in range(2, totalWebCount-1):
+        print(str(i) + " von " + str(totalWebCount-1))
+        webResponse = requests.get("https://api.magicthegathering.io/v1/cards?pageSize=100&page=" + str(i))
+        responseCards = webResponse.json()["cards"]
         foreignCards = foreignCards + getForeignCards(responseCards)
-        cards = cards + response.json()["cards"]
+        cards = cards + webResponse.json()["cards"]
 
+    # we iterate over all foreign cards
     for i in range(len(cards)):
         if "foreignNames" in cards[i]:
             del cards[i]["foreignNames"]
-    
-    cardsJson = toJSON(cards)
-    text_file = open("/home/airflow/mtg/mtgcards_"+ds+".json", "w")
-    text_file.write(cardsJson)
 
-    foreignCardsJson = toJSON(foreignCards)
-    text_file = open("/home/airflow/mtg/foreign_mtgcards_"+ds+".json", "w")
-    text_file.write(foreignCardsJson)
+    # we write all cards (except foreign cards) to a json file and save it with the dateTime as filename
+    cardsInJson = toJSON(cards)
+    textFile = open("/home/airflow/mtg/mtgcards_"+ds+".json", "w")
+    textFile.write(cardsInJson)
+
+    # we write all foreign cards to a json file and save it with the dateTime as filename
+    foreignCardsInJson = toJSON(foreignCards)
+    textFile = open("/home/airflow/mtg/foreign_mtgcards_"+ds+".json", "w")
+    textFile.write(foreignCardsInJson)
     return
 
+# we serialize the objectdata to json string with json.dumps and enter with "\n" a new line for each card
+def toJSON(cards):
+    for i in range(len(cards)):
+        cards[i] = json.dumps(cards[i])
+    cardsInJson = ",\n".join(cards)
+    return cardsInJson
+
+# we iterate over all cards and get all foreign cards
 def getForeignCards(cards): 
     foreignCards = []
     for card in cards:
@@ -197,61 +209,6 @@ def getForeignCards(cards):
                 foreignCard["cardid"] = card["id"]
                 foreignCards.append(foreignCard)
     return foreignCards
-
-def toJSON(cards):
-    for i in range(len(cards)):
-        cards[i] = json.dumps(cards[i])
-    cardsJson = ",\n".join(cards)
-    return cardsJson
-
-# def getAllMTGCards(ds, **kwargs):
-#     webResponse = requests.get("https://api.magicthegathering.io/v1/cards?pageSize=100&page=1")
-#     totalWebCount = webResponse.headers["Total-Count"]
-#     totalWebCount = int((int(totalWebCount) / 100))
-#     print("1" + " von " + str(totalWebCount))
-#     cards = webResponse.json()["cards"]
-#     foreignCards = getForeignCards(cards)
-
-#     # we iterate over all pages and get all cards
-#     for i in range(2, totalWebCount-1):
-#         print(str(i) + " von " + str(totalWebCount))
-#         webResponse = requests.get("https://api.magicthegathering.io/v1/cards?pageSize=100&page=" + str(i))
-#         responseCards = webResponse.json()["cards"]
-#         foreignCards = foreignCards + getForeignCards(responseCards)
-#         cards = cards + webResponse.json()["cards"]
-
-#     # we iterate over all foreign cards
-#     for i in range(len(cards)):
-#         if "foreignNames" in cards[i]:
-#             del cards[i]["foreignNames"]
-
-#     # we write all cards (except foreign cards) to a json file and save it with the dateTime as filename
-#     cardsInJson = toJSON(cards)
-#     textFile = open("/home/airflow/mtg/mtgcards_"+ds+".json", "w")
-#     textFile.write(cardsInJson)
-
-#     # we write all foreign cards to a json file and save it with the dateTime as filename
-#     foreignCardsInJson = toJSON(foreignCards)
-#     textFile = open("/home/airflow/mtg/foreign_mtgcards_"+ds+".json", "w")
-#     textFile.write(foreignCardsInJson)
-#     return
-
-# # we serialize the objectdata to json string with json.dumps and enter with "\n" a new line for each card
-# def toJSON(cards):
-#     for i in range(len(cards)):
-#         cards[i] = json.dumps(cards[i])
-#     cardsInJson = ",\n".join(cards)
-#     return cardsInJson
-
-# # we iterate over all cards and get all foreign cards
-# def getForeignCards(cards): 
-#     foreignCards = []
-#     for card in cards:
-#         if "foreignNames" in card:
-#             for foreignCard in card["foreignNames"]:
-#                 foreignCard["cardid"] = card["id"]
-#                 foreignCards.append(foreignCard)
-#     return foreignCards
 
 # this hive sql query creates the table magic_cards and fills it with the data from the json file from hdfs:///user/hadoop/mtg/raw/magic_cards'.
 # we read the json with JsonSerDe
